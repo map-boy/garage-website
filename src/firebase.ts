@@ -1,15 +1,17 @@
-import { initializeApp } from 'firebase/app';
+﻿import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
+const env = (import.meta as any).env;
+
 const firebaseConfig = {
-  projectId: "garage-management-6f1eb",
-  appId: "1:447004780199:web:92f0f05564923fb004dd82",
-  apiKey: "AIzaSyDFSqQIPeupgD-mgD_1GkNTRqYkKXRANyU",
-  authDomain: "garage-management-6f1eb.firebaseapp.com",
-  storageBucket: "garage-management-6f1eb.firebasestorage.app",
-  messagingSenderId: "447004780199",
-  measurementId: "G-FE865TN8VF"
+  projectId: env.VITE_FIREBASE_PROJECT_ID,
+  appId: env.VITE_FIREBASE_APP_ID,
+  apiKey: env.VITE_FIREBASE_API_KEY,
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  measurementId: env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 const app = initializeApp(firebaseConfig);
