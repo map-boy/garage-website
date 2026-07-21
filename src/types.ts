@@ -84,3 +84,13 @@ export interface UserProfile {
   garageId: string;
   displayName: string;
 }
+
+export interface ArchiveRecord {
+  id: string;
+  archivedAt: string;
+  monthLabel: string;
+  jobCount: number;
+  invoiceCount: number;
+  jobs: JobCard[];
+  invoices: Invoice[];
+}

@@ -9,18 +9,22 @@ import {
 import { 
   doc, 
   collection, 
+  query,
+  orderBy,
   onSnapshot, 
   getDoc 
 } from 'firebase/firestore';
 import { 
-  Wrench, FileText, BarChart3, Users, Car, Eye, CalendarClock, LogOut, KeyRound, ShieldAlert, BadgeInfo, CheckCircle2, ChevronRight, Menu, X, Package, CreditCard, Sparkles, RefreshCw
+  Wrench, FileText, BarChart3, Users, Car, Eye, CalendarClock, LogOut, KeyRound, ShieldAlert, BadgeInfo, CheckCircle2, ChevronRight, Menu, X, Package, CreditCard, Sparkles, RefreshCw, Archive, AlertTriangle
 } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { Client, Vehicle, JobCard, Part, Invoice, ServiceReminder, GarageSettings, UserProfile } from './types';
+import { Client, Vehicle, JobCard, Part, Invoice, ServiceReminder, GarageSettings, UserProfile, ArchiveRecord } from './types';
+import { resetMonth, ResetMonthResult } from './utils/resetMonth';
 import DashboardOverview from './components/DashboardOverview';
 import ReportsPage from './components/ReportsPage';
 import EntitiesView from './components/EntitiesView';
 import LiveMonitoring from './components/LiveMonitoring';
+import ArchivesView from './components/ArchivesView';
 
 export default function App() {
   // Authentication & Profile States
@@ -40,11 +44,18 @@ export default function App() {
   const [stock, setStock] = useState<Part[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [reminders, setReminders] = useState<ServiceReminder[]>([]);
+  const [archives, setArchives] = useState<ArchiveRecord[]>([]);
   const [loadingCollections, setLoadingCollections] = useState(false);
 
   // Sidebar / Navigation States
-  const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'jobs' | 'invoices' | 'inventory' | 'vehicles' | 'customers' | 'reminders' | 'cctv'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'jobs' | 'invoices' | 'inventory' | 'vehicles' | 'customers' | 'reminders' | 'cctv' | 'archives'>('overview');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  // Start New Month (archive + reset) States
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<ResetMonthResult | null>(null);
 
   // Auth Constants
   const BOSS_EMAIL = (import.meta as any).env.VITE_BOSS_EMAIL || "boss@vafubwengetech.internal";
@@ -83,6 +94,7 @@ export default function App() {
         setStock([]);
         setInvoices([]);
         setReminders([]);
+        setArchives([]);
       }
       setLoadingAuth(false);
     });
@@ -217,6 +229,24 @@ export default function App() {
       console.error(e);
     }
 
+    // Listener H: Monthly Archives subcollection (newest first)
+    const archivesPath = `garages/${garageId}/archives`;
+    try {
+      const archivesQuery = query(collection(db, 'garages', garageId, 'archives'), orderBy('archivedAt', 'desc'));
+      const unsubArchives = onSnapshot(archivesQuery, (snapshot) => {
+        const list: ArchiveRecord[] = [];
+        snapshot.forEach(docSnap => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as ArchiveRecord);
+        });
+        setArchives(list);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, archivesPath);
+      });
+      unsubscribers.push(unsubArchives);
+    } catch (e) {
+      console.error(e);
+    }
+
     return () => {
       unsubscribers.forEach(unsub => unsub());
     };
@@ -248,6 +278,30 @@ export default function App() {
     }
   };
 
+  // Archive jobs + invoices for the current month, then clear the live view
+  const handleStartNewMonth = async () => {
+    if (!userProfile?.garageId || isResetting) return;
+
+    setIsResetting(true);
+    setResetError(null);
+
+    try {
+      const result = await resetMonth(userProfile.garageId, jobs, invoices);
+      setResetSuccess(result);
+    } catch (error) {
+      console.error("Reset month failed:", error);
+      setResetError("Could not complete the reset. Nothing was deleted — please try again.");
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const closeResetModal = () => {
+    setShowResetModal(false);
+    setResetError(null);
+    setResetSuccess(null);
+  };
+
   // Nav items structure
   const navigationItems = [
     { id: 'overview', name: 'Overview', icon: BarChart3 },
@@ -259,6 +313,7 @@ export default function App() {
     { id: 'customers', name: 'Customers', icon: Users },
     { id: 'reminders', name: 'Reminders', icon: CalendarClock },
     { id: 'cctv', name: 'CCTV Camera', icon: Eye },
+    { id: 'archives', name: 'Archives', icon: Archive },
   ];
 
   // 1. Render Loading State (during boot verification)
@@ -422,6 +477,19 @@ export default function App() {
               );
             })}
           </div>
+
+          {/* Admin Zone: Start New Month */}
+          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400 px-1 block mb-3 font-display">ADMIN ZONE</span>
+            <button
+              id="start-new-month-btn"
+              onClick={() => setShowResetModal(true)}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold tracking-tight bg-rose-50/60 text-rose-700 border border-rose-100 hover:bg-rose-50 transition cursor-pointer"
+            >
+              <Archive className="w-4 h-4" />
+              <span>Start New Month</span>
+            </button>
+          </div>
         </aside>
 
         {/* Mobile Slide-out Menu */}
@@ -469,7 +537,17 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="border-t border-gray-100 pt-6">
+              <div className="border-t border-gray-100 pt-6 space-y-2">
+                <button
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    setShowResetModal(true);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-rose-50/60 text-rose-700 border border-rose-100 py-3 rounded-xl text-xs font-bold hover:bg-rose-50 transition cursor-pointer"
+                >
+                  <Archive className="w-4 h-4" />
+                  <span>Start New Month</span>
+                </button>
                 <button
                   onClick={() => {
                     setIsMobileMenuOpen(false);
@@ -602,8 +680,95 @@ export default function App() {
               label={settings?.cameraLabel} 
             />
           )}
+
+          {activeTab === 'archives' && (
+            <ArchivesView
+              garageId={userProfile?.garageId || ''}
+              archives={archives}
+              settings={settings || { id: '', garageName: '', address: '', phone: '', currency: 'RWF', taxRate: 0, cameraStreamUrl: '', cameraLabel: '', updatedAt: '' }}
+            />
+          )}
         </main>
       </div>
+
+      {/* Start New Month: Confirmation / Progress Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 print:hidden">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => !isResetting && closeResetModal()} />
+          <div className="relative w-full max-w-md bg-white border border-gray-100 rounded-3xl p-7 shadow-xl">
+            {!resetSuccess ? (
+              <>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="h-11 w-11 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-5 h-5 text-rose-500" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-rose-500 font-mono">DESTRUCTIVE ACTION</span>
+                    <h2 className="text-base font-black text-gray-900 tracking-tight">Start New Month?</h2>
+                  </div>
+                </div>
+
+                <p className="text-xs text-gray-500 leading-relaxed mb-4">
+                  This will archive all <strong>{jobs.length} job card{jobs.length === 1 ? '' : 's'}</strong> and <strong>{invoices.length} invoice{invoices.length === 1 ? '' : 's'}</strong> into a monthly snapshot, then clear them from the live dashboard. Customers, vehicles, inventory, and reminders are not affected.
+                </p>
+
+                {resetError && (
+                  <div className="flex items-center gap-2 bg-rose-50 text-rose-700 p-3 rounded-xl border border-rose-100 text-xs font-medium mb-4">
+                    <ShieldAlert className="w-4 h-4 shrink-0" />
+                    <span>{resetError}</span>
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={closeResetModal}
+                    disabled={isResetting}
+                    className="flex-1 bg-gray-50 hover:bg-gray-100 text-gray-700 py-3 rounded-2xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    id="confirm-reset-btn"
+                    onClick={handleStartNewMonth}
+                    disabled={isResetting}
+                    className="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-3 rounded-2xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isResetting ? (
+                      <>
+                        <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                        <span>Archiving...</span>
+                      </>
+                    ) : (
+                      <span>Yes, Archive & Reset</span>
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="h-11 w-11 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 font-mono">DONE</span>
+                    <h2 className="text-base font-black text-gray-900 tracking-tight">Month Reset Complete</h2>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed mb-6">
+                  Archived <strong>{resetSuccess.jobCount} job{resetSuccess.jobCount === 1 ? '' : 's'}</strong> and <strong>{resetSuccess.invoiceCount} invoice{resetSuccess.invoiceCount === 1 ? '' : 's'}</strong> under <span className="font-mono">{resetSuccess.monthLabel}</span>. The dashboard is now clear for the new month.
+                </p>
+                <button
+                  onClick={closeResetModal}
+                  className="w-full bg-gray-900 hover:bg-black text-white py-3 rounded-2xl text-xs font-bold transition cursor-pointer"
+                >
+                  Close
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
