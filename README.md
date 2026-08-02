@@ -1,20 +1,15 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+﻿# C&V Smart Garage - Boss Dashboard
 
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/74356c7a-4d65-4059-aff2-9df8259c763d
+A read-only companion dashboard for garage management, featuring real-time
+telemetry, revenue reports, pipeline tracking, inventory status, and live
+CCTV stream viewing.
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set up your `.env.local` with the required Firebase config values.
 3. Run the app:
    `npm run dev`
