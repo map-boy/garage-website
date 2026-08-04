@@ -1,4 +1,4 @@
-import * as React from 'react';
+﻿import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { 
   signInWithEmailAndPassword, 
@@ -15,9 +15,10 @@ import {
   getDoc 
 } from 'firebase/firestore';
 import { 
-  Wrench, FileText, BarChart3, Users, Car, Eye, CalendarClock, LogOut, KeyRound, ShieldAlert, BadgeInfo, CheckCircle2, ChevronRight, Menu, X, Package, CreditCard, Sparkles, RefreshCw, Archive, AlertTriangle
+  Wrench, FileText, BarChart3, Users, Car, Eye, CalendarClock, LogOut, KeyRound, ShieldAlert, BadgeInfo, CheckCircle2, ChevronRight, Menu, X, Package, CreditCard, Sparkles, RefreshCw, Archive, AlertTriangle, MessageCircle
 } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import WhatsAppPanel from './components/WhatsAppPanel';
 import { Client, Vehicle, JobCard, Part, Invoice, ServiceReminder, GarageSettings, UserProfile, ArchiveRecord } from './types';
 import { resetMonth, ResetMonthResult } from './utils/resetMonth';
 import DashboardOverview from './components/DashboardOverview';
@@ -48,7 +49,7 @@ export default function App() {
   const [loadingCollections, setLoadingCollections] = useState(false);
 
   // Sidebar / Navigation States
-  const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'jobs' | 'invoices' | 'inventory' | 'vehicles' | 'customers' | 'reminders' | 'cctv' | 'archives'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'reports' | 'jobs' | 'invoices' | 'inventory' | 'vehicles' | 'customers' | 'reminders' | 'cctv' | 'archives' | 'whatsapp'>('overview');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Start New Month (archive + reset) States
@@ -290,7 +291,7 @@ export default function App() {
       setResetSuccess(result);
     } catch (error) {
       console.error("Reset month failed:", error);
-      setResetError("Could not complete the reset. Nothing was deleted — please try again.");
+      setResetError("Could not complete the reset. Nothing was deleted â€” please try again.");
     } finally {
       setIsResetting(false);
     }
@@ -314,6 +315,7 @@ export default function App() {
     { id: 'reminders', name: 'Reminders', icon: CalendarClock },
     { id: 'cctv', name: 'CCTV Camera', icon: Eye },
     { id: 'archives', name: 'Archives', icon: Archive },
+    { id: 'whatsapp', name: 'WhatsApp', icon: MessageCircle },
   ];
 
   // 1. Render Loading State (during boot verification)
@@ -688,6 +690,9 @@ export default function App() {
               settings={settings || { id: '', garageName: '', address: '', phone: '', currency: 'RWF', taxRate: 0, cameraStreamUrl: '', cameraLabel: '', updatedAt: '' }}
             />
           )}
+          {activeTab === 'whatsapp' && (
+            <WhatsAppPanel garageId={userProfile?.garageId || ''} />
+          )}
         </main>
       </div>
 
@@ -772,3 +777,4 @@ export default function App() {
     </div>
   );
 }
+
