@@ -1,6 +1,7 @@
 ﻿import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
 const env = (import.meta as any).env;
 
@@ -17,6 +18,8 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const functions = getFunctions(app, 'us-central1');
+export const sendManualWhatsAppFn = httpsCallable(functions, 'sendManualWhatsApp');
 
 export enum OperationType {
   CREATE = 'create',
@@ -64,3 +67,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
+
+
