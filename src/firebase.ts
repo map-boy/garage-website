@@ -1,4 +1,4 @@
-﻿import { initializeApp } from 'firebase/app';
+import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -20,6 +20,10 @@ export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app, 'us-central1');
 export const sendManualWhatsAppFn = httpsCallable(functions, 'sendManualWhatsApp');
+export const createWhatsAppSessionFn = httpsCallable(functions, 'createWhatsAppSession');
+export const getWhatsAppSessionStatusFn = httpsCallable(functions, 'getWhatsAppSessionStatus');
+export const getWhatsAppQrFn = httpsCallable(functions, 'getWhatsAppQr');
+export const requestWhatsAppPairingCodeFn = httpsCallable(functions, 'requestWhatsAppPairingCode');
 
 export enum OperationType {
   CREATE = 'create',

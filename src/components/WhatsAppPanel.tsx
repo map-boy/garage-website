@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect } from 'react';
 import { doc, onSnapshot, collection, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { db, sendManualWhatsAppFn } from '../firebase';
-import { MessageCircle, Send, Calendar, Trash2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn } from '../firebase';
+import { MessageCircle, Send, Calendar, Trash2, AlertCircle, CheckCircle2, Link2, QrCode, Smartphone, RefreshCw } from 'lucide-react';
 
 interface WhatsAppPanelProps {
   garageId: string;
@@ -16,6 +16,12 @@ interface ScheduledMessage {
   sentCount?: number;
 }
 
+interface SessionStatus {
+  linked: boolean;
+  status?: string;
+  phone?: string;
+  sessionId?: string;
+}
 export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [used, setUsed] = useState(0);
   const [limit, setLimit] = useState(1000);
@@ -31,6 +37,26 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [scheduling, setScheduling] = useState(false);
 
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
+
+  const [session, setSession] = useState<SessionStatus>({ linked: false });
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [linking, setLinking] = useState(false);
+  const [qrImage, setQrImage] = useState<string | null>(null);
+  const [linkMode, setLinkMode] = useState<'qr' | 'code'>('qr');
+  const [pairPhone, setPairPhone] = useState('');
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  const refreshSessionStatus = async () => {
+    try {
+      const res: any = await getWhatsAppSessionStatusFn({ garageId });
+      setSession(res.data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setCheckingSession(false);
+    }
+  };
 
   useEffect(() => {
     if (!garageId) return;
@@ -49,11 +75,67 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
         );
       }
     );
+    refreshSessionStatus();
     return () => {
       unsubGarage();
       unsubSched();
     };
   }, [garageId]);
+
+  useEffect(() => {
+    if (!session.linked || session.status === 'connected') return;
+    const interval = setInterval(refreshSessionStatus, 4000);
+    return () => clearInterval(interval);
+  }, [session.linked, session.status, garageId]);
+
+  const handleStartLinking = async () => {
+    setLinking(true);
+    setLinkError(null);
+    setQrImage(null);
+    setPairingCode(null);
+    try {
+      if (!session.sessionId) {
+        await createWhatsAppSessionFn({ garageId });
+      }
+      if (linkMode === 'qr') {
+        const res: any = await getWhatsAppQrFn({ garageId });
+        setQrImage(res.data.qrCode);
+      }
+      await refreshSessionStatus();
+    } catch (err: any) {
+      setLinkError(err.message || 'Failed to start linking.');
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const handleRefreshQr = async () => {
+    setLinkError(null);
+    try {
+      const res: any = await getWhatsAppQrFn({ garageId });
+      setQrImage(res.data.qrCode);
+    } catch (err: any) {
+      setLinkError(err.message || 'QR not ready yet, try again in a moment.');
+    }
+  };
+
+  const handleRequestPairingCode = async () => {
+    if (!pairPhone) return;
+    setLinking(true);
+    setLinkError(null);
+    setPairingCode(null);
+    try {
+      if (!session.sessionId) {
+        await createWhatsAppSessionFn({ garageId });
+      }
+      const res: any = await requestWhatsAppPairingCodeFn({ garageId, phoneNumber: pairPhone });
+      setPairingCode(res.data.pairingCode);
+    } catch (err: any) {
+      setLinkError(err.message || 'Failed to request pairing code.');
+    } finally {
+      setLinking(false);
+    }
+  };
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,12 +183,128 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
 
   const percentUsed = Math.min(100, Math.round((used / limit) * 100));
   const quotaLow = used >= limit * 0.9;
+  const isConnected = session.linked && session.status === 'connected';
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-black text-gray-900 tracking-tight">WhatsApp Messaging</h1>
         <p className="text-sm text-gray-500 font-medium">Send messages and schedule holiday greetings to your clients</p>
+      </div>
+
+      {/* WhatsApp Connection Card */}
+      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Smartphone className="w-4 h-4 text-emerald-600" />
+            <h3 className="text-sm font-black text-gray-900 uppercase tracking-wide">WhatsApp Number</h3>
+          </div>
+          {!checkingSession && (
+            <button onClick={refreshSessionStatus} className="text-gray-400 hover:text-gray-600" title="Refresh status">
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {checkingSession ? (
+          <p className="text-sm text-gray-400">Checking connection...</p>
+        ) : isConnected ? (
+          <div className="flex items-center gap-2 text-sm font-bold text-emerald-700 bg-emerald-50 p-3 rounded-xl">
+            <CheckCircle2 className="w-4 h-4" />
+            Connected {session.phone ? `as ${session.phone}` : ''}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-xs text-gray-500">
+              Link the WhatsApp number that will send messages to your clients. Scan a QR code, or if scanning
+              does not work, use a phone number to get a login code instead.
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setLinkMode('qr'); setPairingCode(null); setLinkError(null); }}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg border ${
+                  linkMode === 'qr' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-200'
+                }`}
+              >
+                <QrCode className="w-3.5 h-3.5" /> Scan QR Code
+              </button>
+              <button
+                onClick={() => { setLinkMode('code'); setQrImage(null); setLinkError(null); }}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg border ${
+                  linkMode === 'code' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-600 border-gray-200'
+                }`}
+              >
+                <Link2 className="w-3.5 h-3.5" /> Use Phone Number
+              </button>
+            </div>
+
+            {linkMode === 'qr' && (
+              <div className="space-y-3">
+                {qrImage ? (
+                  <div className="flex flex-col items-center gap-3 p-4 bg-gray-50 rounded-xl">
+                    <img src={qrImage} alt="WhatsApp QR Code" className="w-48 h-48" />
+                    <p className="text-xs text-gray-500 text-center">
+                      Open WhatsApp on the phone &rarr; Settings &rarr; Linked Devices &rarr; Link a Device,
+                      then scan this code. It refreshes every ~60 seconds.
+                    </p>
+                    <button
+                      onClick={handleRefreshQr}
+                      className="text-xs font-bold text-emerald-700 hover:text-emerald-800"
+                    >
+                      Refresh QR Code
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleStartLinking}
+                    disabled={linking}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition disabled:opacity-50"
+                  >
+                    {linking ? 'Generating QR Code...' : 'Show QR Code'}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {linkMode === 'code' && (
+              <div className="space-y-3">
+                {pairingCode ? (
+                  <div className="flex flex-col items-center gap-2 p-4 bg-gray-50 rounded-xl">
+                    <p className="text-xs text-gray-500">Enter this code in WhatsApp &rarr; Linked Devices &rarr; Link with phone number:</p>
+                    <p className="text-3xl font-black tracking-widest text-emerald-700">{pairingCode}</p>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 uppercase">Phone Number to Link</label>
+                      <input
+                        type="tel"
+                        placeholder="+250 788 000 000"
+                        className="w-full mt-1 p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                        value={pairPhone}
+                        onChange={(e) => setPairPhone(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      onClick={handleRequestPairingCode}
+                      disabled={linking || !pairPhone}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition disabled:opacity-50"
+                    >
+                      {linking ? 'Requesting Code...' : 'Get Login Code'}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {linkError && (
+              <div className="flex items-center gap-2 text-xs font-medium p-2.5 rounded-lg bg-rose-50 text-rose-700">
+                <AlertCircle className="w-4 h-4" /> {linkError}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Quota Card */}
