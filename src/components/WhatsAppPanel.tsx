@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { doc, onSnapshot, collection, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn } from '../firebase';
+import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn, wakeVmFn, restartWhatsAppSessionFn } from '../firebase';
 import { MessageCircle, Send, Calendar, Trash2, AlertCircle, CheckCircle2, Link2, QrCode, Smartphone, RefreshCw } from 'lucide-react';
 
 interface WhatsAppPanelProps {
@@ -47,6 +47,10 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
 
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [waking, setWaking] = useState(false);
+  const [wakeResult, setWakeResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [restarting, setRestarting] = useState(false);
   const refreshSessionStatus = async () => {
     try {
       const res: any = await getWhatsAppSessionStatusFn({ garageId });
@@ -55,6 +59,35 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
       console.error(err);
     } finally {
       setCheckingSession(false);
+      setLastChecked(new Date());
+    }
+  };
+
+  const handleWakeVm = async () => {
+    setWaking(true);
+    setWakeResult(null);
+    try {
+      await wakeVmFn();
+      setWakeResult({ type: 'success', text: 'VM is awake and OpenWA service is ready.' });
+      await refreshSessionStatus();
+    } catch (err: any) {
+      setWakeResult({ type: 'error', text: err.message || 'Failed to wake VM.' });
+    } finally {
+      setWaking(false);
+    }
+  };
+
+  const handleRestartSession = async () => {
+    setRestarting(true);
+    setWakeResult(null);
+    try {
+      await restartWhatsAppSessionFn({ garageId });
+      setWakeResult({ type: 'success', text: 'Session restarted successfully.' });
+      await refreshSessionStatus();
+    } catch (err: any) {
+      setWakeResult({ type: 'error', text: err.message || 'Failed to restart session.' });
+    } finally {
+      setRestarting(false);
     }
   };
 
@@ -83,8 +116,9 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   }, [garageId]);
 
   useEffect(() => {
-    if (!session.linked || session.status === 'connected') return;
-    const interval = setInterval(refreshSessionStatus, 4000);
+    if (!garageId) return;
+    const pollMs = session.linked && session.status === 'connected' ? 20000 : 4000;
+    const interval = setInterval(refreshSessionStatus, pollMs);
     return () => clearInterval(interval);
   }, [session.linked, session.status, garageId]);
 
@@ -199,12 +233,45 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
             <Smartphone className="w-4 h-4 text-emerald-600" />
             <h3 className="text-sm font-black text-gray-900 uppercase tracking-wide">WhatsApp Number</h3>
           </div>
-          {!checkingSession && (
-            <button onClick={refreshSessionStatus} className="text-gray-400 hover:text-gray-600" title="Refresh status">
-              <RefreshCw className="w-4 h-4" />
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {lastChecked && (
+              <span className="text-[10px] text-gray-400 font-medium">
+                Checked {Math.max(0, Math.round((Date.now() - lastChecked.getTime()) / 1000))}s ago
+              </span>
+            )}
+            {!checkingSession && (
+              <button onClick={refreshSessionStatus} className="text-gray-400 hover:text-gray-600" title="Refresh status">
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={handleWakeVm}
+            disabled={waking || restarting}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {waking ? 'Waking VM...' : 'Wake VM Now'}
+          </button>
+          <button
+            onClick={handleRestartSession}
+            disabled={waking || restarting}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {restarting ? 'Restarting...' : 'Restart Session'}
+          </button>
+        </div>
+
+        {wakeResult && (
+          <div className={`flex items-center gap-2 text-xs font-medium p-2.5 rounded-lg ${
+            wakeResult.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+          }`}>
+            {wakeResult.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+            {wakeResult.text}
+          </div>
+        )}
 
         {checkingSession ? (
           <p className="text-sm text-gray-400">Checking connection...</p>
@@ -470,3 +537,6 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
     </div>
   );
 }
+
+
+

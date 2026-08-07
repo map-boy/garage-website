@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+﻿import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -24,6 +24,8 @@ export const createWhatsAppSessionFn = httpsCallable(functions, 'createWhatsAppS
 export const getWhatsAppSessionStatusFn = httpsCallable(functions, 'getWhatsAppSessionStatus');
 export const getWhatsAppQrFn = httpsCallable(functions, 'getWhatsAppQr');
 export const requestWhatsAppPairingCodeFn = httpsCallable(functions, 'requestWhatsAppPairingCode');
+export const wakeVmFn = httpsCallable(functions, 'wakeVm');
+export const restartWhatsAppSessionFn = httpsCallable(functions, 'restartWhatsAppSession');
 
 export enum OperationType {
   CREATE = 'create',
@@ -71,6 +73,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
 
 
 
