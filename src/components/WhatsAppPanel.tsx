@@ -1,6 +1,6 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { doc, onSnapshot, collection, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn, wakeVmFn, restartWhatsAppSessionFn } from '../firebase';
+import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn, wakeVmFn, restartWhatsAppSessionFn, getVmStatusFn, disconnectWhatsAppSessionFn } from '../firebase';
 import { MessageCircle, Send, Calendar, Trash2, AlertCircle, CheckCircle2, Link2, QrCode, Smartphone, RefreshCw } from 'lucide-react';
 
 interface WhatsAppPanelProps {
@@ -23,7 +23,39 @@ interface SessionStatus {
   sessionId?: string;
 }
 export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
+  const [vmRunning, setVmRunning] = useState<boolean | null>(null);
+  const [vmIdleMin, setVmIdleMin] = useState<number | null>(null);
+
+  useEffect(() => {
+    const checkVm = async () => {
+      try {
+        const res: any = await getVmStatusFn();
+        setVmRunning(res.data.running);
+        setVmIdleMin(res.data.idleMinutes);
+      } catch {
+        setVmRunning(null);
+      }
+    };
+    checkVm();
+    const interval = setInterval(checkVm, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
   const [used, setUsed] = useState(0);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  const handleDisconnect = async () => {
+    if (!window.confirm('Disconnect this WhatsApp number? You will need to scan a new QR code or pairing code to link another number.')) return;
+    setDisconnecting(true);
+    try {
+      await disconnectWhatsAppSessionFn({ garageId });
+      await refreshSessionStatus();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setDisconnecting(false);
+    }
+  };
   const [limit, setLimit] = useState(1000);
 
   const [phone, setPhone] = useState('');
@@ -232,6 +264,9 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
           <div className="flex items-center gap-2">
             <Smartphone className="w-4 h-4 text-emerald-600" />
             <h3 className="text-sm font-black text-gray-900 uppercase tracking-wide">WhatsApp Number</h3>
+            <span className={`ml-2 text-xs font-bold px-2 py-0.5 rounded-full ${vmRunning ? 'bg-emerald-100 text-emerald-700' : vmRunning === false ? 'bg-gray-100 text-gray-500' : 'bg-yellow-100 text-yellow-700'}`}>
+              {vmRunning === null ? 'Checking VM...' : vmRunning ? `VM awake${vmIdleMin !== null ? ` - idle ${Math.round(vmIdleMin)}m` : ''}` : 'VM asleep'}
+            </span>
           </div>
           <div className="flex items-center gap-3">
             {lastChecked && (

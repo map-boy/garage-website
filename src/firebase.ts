@@ -1,4 +1,4 @@
-﻿import { initializeApp } from 'firebase/app';
+import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -25,6 +25,8 @@ export const getWhatsAppSessionStatusFn = httpsCallable(functions, 'getWhatsAppS
 export const getWhatsAppQrFn = httpsCallable(functions, 'getWhatsAppQr');
 export const requestWhatsAppPairingCodeFn = httpsCallable(functions, 'requestWhatsAppPairingCode');
 export const wakeVmFn = httpsCallable(functions, 'wakeVm');
+export const getVmStatusFn = httpsCallable(functions, 'getVmStatus');
+export const disconnectWhatsAppSessionFn = httpsCallable(functions, 'disconnectWhatsAppSession');
 export const restartWhatsAppSessionFn = httpsCallable(functions, 'restartWhatsAppSession');
 
 export enum OperationType {
