@@ -37,7 +37,7 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
       }
     };
     checkVm();
-    const interval = setInterval(checkVm, 30000);
+    const interval = setInterval(checkVm, 60000);
     return () => clearInterval(interval);
   }, []);
 
