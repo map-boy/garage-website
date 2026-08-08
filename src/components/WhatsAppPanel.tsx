@@ -269,6 +269,11 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
             </span>
           </div>
           <div className="flex items-center gap-3">
+            {session?.linked && (
+              <button onClick={handleDisconnect} disabled={disconnecting} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50">
+                {disconnecting ? 'Disconnecting...' : 'Disconnect Number'}
+              </button>
+            )}
             {lastChecked && (
               <span className="text-[10px] text-gray-400 font-medium">
                 Checked {Math.max(0, Math.round((Date.now() - lastChecked.getTime()) / 1000))}s ago
