@@ -29,6 +29,27 @@ export const getVmStatusFn = httpsCallable(functions, 'getVmStatus');
 export const disconnectWhatsAppSessionFn = httpsCallable(functions, 'disconnectWhatsAppSession');
 export const restartWhatsAppSessionFn = httpsCallable(functions, 'restartWhatsAppSession');
 
+/**
+ * Session statuses that mean "this number can send a message right now".
+ *
+ * Mirrors SESSION_READY_STATES in functions/src/lib/openwa.ts. These drifted
+ * apart once: the backend accepted 'ready' while this dashboard only checked
+ * for 'connected', so a perfectly healthy session displayed as unlinked and
+ * operators re-scanned QR codes that were never the problem. The backend now
+ * also returns a `ready` boolean it has already evaluated — prefer that, and
+ * keep this list only as a fallback for an older deployed backend.
+ */
+export const SESSION_READY_STATES = [
+  'ready',
+  'connected',
+  'active',
+  'authenticated',
+];
+
+export function isSessionReady(status?: string | null): boolean {
+  return !!status && SESSION_READY_STATES.includes(status.toLowerCase());
+}
+
 export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
@@ -55,7 +76,18 @@ export interface FirestoreErrorInfo {
   };
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+/**
+ * Logs a Firestore failure with auth context and returns a readable message.
+ *
+ * Deliberately does not throw: it is called from onSnapshot error callbacks,
+ * where throwing produced an unhandled rejection that took down the whole
+ * dashboard because one collection was unreadable.
+ */
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): string {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -73,7 +105,18 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+
+  const code = (error as { code?: string })?.code ?? '';
+  switch (code) {
+    case 'permission-denied':
+      return 'You do not have permission to view this data.';
+    case 'unavailable':
+      return 'Connection lost. Retrying automatically.';
+    case 'resource-exhausted':
+      return 'The service is busy right now. Please try again shortly.';
+    default:
+      return error instanceof Error ? error.message : 'Something went wrong.';
+  }
 }
 
 

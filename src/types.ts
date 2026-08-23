@@ -85,12 +85,31 @@ export interface UserProfile {
   displayName: string;
 }
 
+/**
+ * A month-close snapshot.
+ *
+ * The manifest carries only counts. The archived jobs and invoices live in
+ * `archives/{id}/records/*` chunks and are fetched on demand — an archive
+ * used to embed every record inline, which both hit Firestore's 1 MiB
+ * document cap and forced the dashboard to download years of history just to
+ * render the list of month names.
+ */
 export interface ArchiveRecord {
   id: string;
   archivedAt: string;
   monthLabel: string;
   jobCount: number;
   invoiceCount: number;
-  jobs: JobCard[];
-  invoices: Invoice[];
+  chunkCount?: number;
+  complete?: boolean;
+  /** Present only on archives written before records were chunked out. */
+  jobs?: JobCard[];
+  invoices?: Invoice[];
+}
+
+/** One chunk of archived records. */
+export interface ArchiveChunk {
+  kind: 'jobs' | 'invoices';
+  index: number;
+  rows: JobCard[] | Invoice[];
 }

@@ -1,6 +1,9 @@
+// The React namespace is needed for the FormEvent annotations below;
+// without this import `npm run lint` (tsc --noEmit) fails on this file.
+import type { FormEvent } from 'react';
 import { useState, useEffect } from 'react';
 import { doc, onSnapshot, collection, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn, wakeVmFn, restartWhatsAppSessionFn, getVmStatusFn, disconnectWhatsAppSessionFn } from '../firebase';
+import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn, wakeVmFn, restartWhatsAppSessionFn, getVmStatusFn, disconnectWhatsAppSessionFn, isSessionReady } from '../firebase';
 import { MessageCircle, Send, Calendar, Trash2, AlertCircle, CheckCircle2, Link2, QrCode, Smartphone, RefreshCw } from 'lucide-react';
 
 interface WhatsAppPanelProps {
@@ -18,7 +21,10 @@ interface ScheduledMessage {
 
 interface SessionStatus {
   linked: boolean;
+  /** Evaluated by the backend against its own ready-state list. */
+  ready?: boolean;
   status?: string;
+  lastKnownStatus?: string | null;
   phone?: string;
   sessionId?: string;
 }
@@ -27,18 +33,28 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [vmIdleMin, setVmIdleMin] = useState<number | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const checkVm = async () => {
+      // Skip while the tab is hidden: a dashboard left open on a spare
+      // monitor should not keep invoking a callable all night.
+      if (document.visibilityState !== 'visible') return;
       try {
         const res: any = await getVmStatusFn();
+        if (cancelled) return;
         setVmRunning(res.data.running);
         setVmIdleMin(res.data.idleMinutes);
       } catch {
-        setVmRunning(null);
+        if (!cancelled) setVmRunning(null);
       }
     };
     checkVm();
     const interval = setInterval(checkVm, 60000);
-    return () => clearInterval(interval);
+    document.addEventListener('visibilitychange', checkVm);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', checkVm);
+    };
   }, []);
 
   const [used, setUsed] = useState(0);
@@ -83,6 +99,15 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [waking, setWaking] = useState(false);
   const [wakeResult, setWakeResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [restarting, setRestarting] = useState(false);
+
+  // OpenWA reports a working session as 'ready', not 'connected'. Checking
+  // only for 'connected' meant a healthy number always displayed as unlinked
+  // — and kept the fast poll below running forever. Trust the backend's own
+  // `ready` verdict when it sends one. Declared here, above the effects that
+  // depend on it, because a dependency array is evaluated during render.
+  const isConnected = session.linked &&
+    (session.ready ?? isSessionReady(session.status));
+
   const refreshSessionStatus = async () => {
     try {
       const res: any = await getWhatsAppSessionStatusFn({ garageId });
@@ -147,12 +172,39 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
     };
   }, [garageId]);
 
+  // Poll the session status only while it is worth polling.
+  //
+  // This used to run every 4 seconds forever whenever the session was not
+  // 'connected' — a condition that was permanently true because of the
+  // status-name mismatch above. One dashboard left open overnight fired
+  // ~21,000 function invocations a day, each one hitting Firestore and
+  // (while the VM slept) waiting on a timeout. Now it backs off when idle,
+  // polls fast only during an active linking attempt, and stops entirely
+  // when the tab is hidden.
   useEffect(() => {
     if (!garageId) return;
-    const pollMs = session.linked && session.status === 'connected' ? 20000 : 4000;
-    const interval = setInterval(refreshSessionStatus, pollMs);
-    return () => clearInterval(interval);
-  }, [session.linked, session.status, garageId]);
+
+    const linking = !!qrImage || !!pairingCode;
+    const pollMs = linking ? 5000 : isConnected ? 60000 : 30000;
+
+    let timer: number | undefined;
+    const tick = () => {
+      if (document.visibilityState === 'visible') refreshSessionStatus();
+    };
+    timer = window.setInterval(tick, pollMs);
+
+    // Catch up immediately when the operator returns to the tab, rather than
+    // showing them a status that is up to a minute stale.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshSessionStatus();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      if (timer) clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [garageId, isConnected, qrImage, pairingCode]);
 
   const handleStartLinking = async () => {
     setLinking(true);
@@ -203,7 +255,7 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
     }
   };
 
-  const handleSend = async (e: React.FormEvent) => {
+  const handleSend = async (e: FormEvent) => {
     e.preventDefault();
     if (!phone || !message) return;
     setSending(true);
@@ -220,7 +272,7 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
     }
   };
 
-  const handleSchedule = async (e: React.FormEvent) => {
+  const handleSchedule = async (e: FormEvent) => {
     e.preventDefault();
     if (!schedTitle || !schedMessage || !schedDate) return;
     setScheduling(true);
@@ -247,9 +299,8 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
     await deleteDoc(doc(db, 'garages', garageId, 'scheduledMessages', id));
   };
 
-  const percentUsed = Math.min(100, Math.round((used / limit) * 100));
-  const quotaLow = used >= limit * 0.9;
-  const isConnected = session.linked && session.status === 'connected';
+  const percentUsed = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const quotaLow = limit > 0 && used >= limit * 0.9;
 
   return (
     <div className="space-y-6">
