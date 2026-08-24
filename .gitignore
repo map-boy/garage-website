@@ -9,3 +9,8 @@ coverage/
 
 service-account.json
 .vercel
+garage-management-*firebase-adminsdk*.json
+*.bak-*
+.firebase/
+check-archives.cjs
+check-user.cjs
