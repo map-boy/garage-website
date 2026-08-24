@@ -1,24 +1,21 @@
+// The React namespace is needed for the FormEvent annotations below;
+// without this import `npm run lint` (tsc --noEmit) fails on this file.
+import type { FormEvent } from 'react';
 import { useState, useEffect } from 'react';
-import { doc, onSnapshot, collection, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn, wakeVmFn, restartWhatsAppSessionFn, getVmStatusFn, disconnectWhatsAppSessionFn } from '../firebase';
-import { MessageCircle, Send, Calendar, Trash2, AlertCircle, CheckCircle2, Link2, QrCode, Smartphone, RefreshCw } from 'lucide-react';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db, sendManualWhatsAppFn, createWhatsAppSessionFn, getWhatsAppSessionStatusFn, getWhatsAppQrFn, requestWhatsAppPairingCodeFn, wakeVmFn, restartWhatsAppSessionFn, getVmStatusFn, disconnectWhatsAppSessionFn, isSessionReady } from '../firebase';
+import { MessageCircle, Send, AlertCircle, CheckCircle2, Link2, QrCode, Smartphone, RefreshCw } from 'lucide-react';
 
 interface WhatsAppPanelProps {
   garageId: string;
 }
 
-interface ScheduledMessage {
-  id: string;
-  title: string;
-  message: string;
-  sendDate: string;
-  status: 'pending' | 'sent' | 'cancelled';
-  sentCount?: number;
-}
-
 interface SessionStatus {
   linked: boolean;
+  /** Evaluated by the backend against its own ready-state list. */
+  ready?: boolean;
   status?: string;
+  lastKnownStatus?: string | null;
   phone?: string;
   sessionId?: string;
 }
@@ -27,18 +24,28 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [vmIdleMin, setVmIdleMin] = useState<number | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const checkVm = async () => {
+      // Skip while the tab is hidden: a dashboard left open on a spare
+      // monitor should not keep invoking a callable all night.
+      if (document.visibilityState !== 'visible') return;
       try {
         const res: any = await getVmStatusFn();
+        if (cancelled) return;
         setVmRunning(res.data.running);
         setVmIdleMin(res.data.idleMinutes);
       } catch {
-        setVmRunning(null);
+        if (!cancelled) setVmRunning(null);
       }
     };
     checkVm();
     const interval = setInterval(checkVm, 60000);
-    return () => clearInterval(interval);
+    document.addEventListener('visibilitychange', checkVm);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', checkVm);
+    };
   }, []);
 
   const [used, setUsed] = useState(0);
@@ -63,13 +70,6 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const [schedTitle, setSchedTitle] = useState('');
-  const [schedMessage, setSchedMessage] = useState('');
-  const [schedDate, setSchedDate] = useState('');
-  const [scheduling, setScheduling] = useState(false);
-
-  const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
-
   const [session, setSession] = useState<SessionStatus>({ linked: false });
   const [checkingSession, setCheckingSession] = useState(true);
   const [linking, setLinking] = useState(false);
@@ -83,6 +83,15 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
   const [waking, setWaking] = useState(false);
   const [wakeResult, setWakeResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [restarting, setRestarting] = useState(false);
+
+  // OpenWA reports a working session as 'ready', not 'connected'. Checking
+  // only for 'connected' meant a healthy number always displayed as unlinked
+  // — and kept the fast poll below running forever. Trust the backend's own
+  // `ready` verdict when it sends one. Declared here, above the effects that
+  // depend on it, because a dependency array is evaluated during render.
+  const isConnected = session.linked &&
+    (session.ready ?? isSessionReady(session.status));
+
   const refreshSessionStatus = async () => {
     try {
       const res: any = await getWhatsAppSessionStatusFn({ garageId });
@@ -132,27 +141,45 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
         setLimit(data.whatsappMessagesLimit ?? 1000);
       }
     });
-    const unsubSched = onSnapshot(
-      collection(db, 'garages', garageId, 'scheduledMessages'),
-      (snap) => {
-        setScheduledMessages(
-          snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ScheduledMessage, 'id'>) }))
-        );
-      }
-    );
     refreshSessionStatus();
     return () => {
       unsubGarage();
-      unsubSched();
     };
   }, [garageId]);
 
+  // Poll the session status only while it is worth polling.
+  //
+  // This used to run every 4 seconds forever whenever the session was not
+  // 'connected' — a condition that was permanently true because of the
+  // status-name mismatch above. One dashboard left open overnight fired
+  // ~21,000 function invocations a day, each one hitting Firestore and
+  // (while the VM slept) waiting on a timeout. Now it backs off when idle,
+  // polls fast only during an active linking attempt, and stops entirely
+  // when the tab is hidden.
   useEffect(() => {
     if (!garageId) return;
-    const pollMs = session.linked && session.status === 'connected' ? 20000 : 4000;
-    const interval = setInterval(refreshSessionStatus, pollMs);
-    return () => clearInterval(interval);
-  }, [session.linked, session.status, garageId]);
+
+    const linking = !!qrImage || !!pairingCode;
+    const pollMs = linking ? 5000 : isConnected ? 60000 : 30000;
+
+    let timer: number | undefined;
+    const tick = () => {
+      if (document.visibilityState === 'visible') refreshSessionStatus();
+    };
+    timer = window.setInterval(tick, pollMs);
+
+    // Catch up immediately when the operator returns to the tab, rather than
+    // showing them a status that is up to a minute stale.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshSessionStatus();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      if (timer) clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [garageId, isConnected, qrImage, pairingCode]);
 
   const handleStartLinking = async () => {
     setLinking(true);
@@ -203,7 +230,7 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
     }
   };
 
-  const handleSend = async (e: React.FormEvent) => {
+  const handleSend = async (e: FormEvent) => {
     e.preventDefault();
     if (!phone || !message) return;
     setSending(true);
@@ -220,42 +247,14 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
     }
   };
 
-  const handleSchedule = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!schedTitle || !schedMessage || !schedDate) return;
-    setScheduling(true);
-    try {
-      await addDoc(collection(db, 'garages', garageId, 'scheduledMessages'), {
-        title: schedTitle,
-        message: schedMessage,
-        sendDate: schedDate,
-        status: 'pending',
-        createdAt: serverTimestamp(),
-      });
-      setSchedTitle('');
-      setSchedMessage('');
-      setSchedDate('');
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setScheduling(false);
-    }
-  };
-
-  const handleCancelScheduled = async (id: string) => {
-    if (!confirm('Cancel this scheduled message?')) return;
-    await deleteDoc(doc(db, 'garages', garageId, 'scheduledMessages', id));
-  };
-
-  const percentUsed = Math.min(100, Math.round((used / limit) * 100));
-  const quotaLow = used >= limit * 0.9;
-  const isConnected = session.linked && session.status === 'connected';
+  const percentUsed = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const quotaLow = limit > 0 && used >= limit * 0.9;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-black text-gray-900 tracking-tight">WhatsApp Messaging</h1>
-        <p className="text-sm text-gray-500 font-medium">Send messages and schedule holiday greetings to your clients</p>
+        <p className="text-sm text-gray-500 font-medium">Send a message to a client. Nothing is sent automatically.</p>
       </div>
 
       {/* WhatsApp Connection Card */}
@@ -484,96 +483,6 @@ export default function WhatsAppPanel({ garageId }: WhatsAppPanelProps) {
         </form>
       </div>
 
-      {/* Schedule Holiday Message */}
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm space-y-4">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-amber-600" />
-          <h3 className="text-sm font-black text-gray-900 uppercase tracking-wide">Schedule a Holiday Message</h3>
-        </div>
-        <p className="text-xs text-gray-500">
-          Sends automatically to all clients on the chosen date, at 8:00 AM Kigali time.
-        </p>
-        <form onSubmit={handleSchedule} className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-bold text-gray-500 uppercase">Title</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Christmas Greeting"
-                className="w-full mt-1 p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-amber-500 outline-none text-sm"
-                value={schedTitle}
-                onChange={(e) => setSchedTitle(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gray-500 uppercase">Send Date</label>
-              <input
-                type="date"
-                required
-                className="w-full mt-1 p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-amber-500 outline-none text-sm"
-                value={schedDate}
-                onChange={(e) => setSchedDate(e.target.value)}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-bold text-gray-500 uppercase">Message</label>
-            <textarea
-              required
-              rows={3}
-              placeholder="Happy holidays from C&V Smart Garage & Carwash Ltd!"
-              className="w-full mt-1 p-2.5 rounded-lg border border-gray-200 focus:ring-2 focus:ring-amber-500 outline-none text-sm resize-none"
-              value={schedMessage}
-              onChange={(e) => setSchedMessage(e.target.value)}
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={scheduling}
-            className="bg-amber-500 hover:bg-amber-600 text-gray-900 text-xs font-bold px-4 py-2.5 rounded-xl transition disabled:opacity-50"
-          >
-            {scheduling ? 'Scheduling...' : 'Schedule Message'}
-          </button>
-        </form>
-      </div>
-
-      {/* Scheduled List */}
-      <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm">
-        <h3 className="text-sm font-black text-gray-900 uppercase tracking-wide mb-4">Scheduled Messages</h3>
-        {scheduledMessages.length === 0 ? (
-          <p className="text-sm text-gray-400 italic">No scheduled messages yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {scheduledMessages
-              .sort((a, b) => a.sendDate.localeCompare(b.sendDate))
-              .map((sm) => (
-                <div key={sm.id} className="flex items-center justify-between p-3 rounded-xl border border-gray-100">
-                  <div>
-                    <p className="text-sm font-bold text-gray-900">{sm.title}</p>
-                    <p className="text-xs text-gray-500">{sm.sendDate} &middot; {sm.message.slice(0, 60)}{sm.message.length > 60 ? '...' : ''}</p>
-                    <span className={`inline-block mt-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                      sm.status === 'sent' ? 'bg-emerald-50 text-emerald-700' :
-                      sm.status === 'cancelled' ? 'bg-gray-100 text-gray-500' :
-                      'bg-amber-50 text-amber-700'
-                    }`}>
-                      {sm.status}{sm.status === 'sent' && sm.sentCount != null ? ` (${sm.sentCount} sent)` : ''}
-                    </span>
-                  </div>
-                  {sm.status === 'pending' && (
-                    <button
-                      onClick={() => handleCancelScheduled(sm.id)}
-                      className="text-rose-500 hover:text-rose-700 p-2"
-                      title="Cancel"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

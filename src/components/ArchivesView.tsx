@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { doc, deleteDoc, collection, getDocs, writeBatch } from 'firebase/firestore';
 import {
   Archive, ChevronDown, ChevronUp, Trash2, AlertTriangle, ShieldAlert, Wrench, CreditCard, X
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { ArchiveRecord, GarageSettings } from '../types';
+import { ArchiveRecord, ArchiveChunk, GarageSettings, JobCard, Invoice } from '../types';
 import { formatCurrency, formatDate } from '../utils/format';
 
 interface ArchivesViewProps {
@@ -13,13 +13,78 @@ interface ArchivesViewProps {
   settings: GarageSettings;
 }
 
+interface LoadedRecords {
+  jobs: JobCard[];
+  invoices: Invoice[];
+}
+
 export default function ArchivesView({ garageId, archives, settings }: ArchivesViewProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [records, setRecords] = useState<Record<string, LoadedRecords>>({});
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const pendingDeleteArchive = archives.find(a => a.id === pendingDeleteId) || null;
+
+  /**
+   * Loads an archive's records the first time it is expanded, and caches them
+   * for the session. Archives are immutable once written, so a cached copy
+   * can never go stale.
+   */
+  const loadRecords = async (archive: ArchiveRecord) => {
+    if (records[archive.id]) return;
+
+    // Archives written before records were chunked out still carry their
+    // rows inline; use them directly rather than querying an empty
+    // subcollection.
+    if (archive.jobs || archive.invoices) {
+      setRecords(prev => ({
+        ...prev,
+        [archive.id]: {
+          jobs: archive.jobs ?? [],
+          invoices: archive.invoices ?? [],
+        },
+      }));
+      return;
+    }
+
+    setLoadingId(archive.id);
+    setLoadError(null);
+    try {
+      const snap = await getDocs(
+        collection(db, 'garages', garageId, 'archives', archive.id, 'records')
+      );
+      const jobs: JobCard[] = [];
+      const invoices: Invoice[] = [];
+      snap.docs
+        .map(d => d.data() as ArchiveChunk)
+        .sort((a, b) => a.index - b.index)
+        .forEach(chunk => {
+          if (chunk.kind === 'jobs') jobs.push(...(chunk.rows as JobCard[]));
+          else invoices.push(...(chunk.rows as Invoice[]));
+        });
+      setRecords(prev => ({ ...prev, [archive.id]: { jobs, invoices } }));
+    } catch (error) {
+      setLoadError(handleFirestoreError(
+        error, OperationType.LIST,
+        `garages/${garageId}/archives/${archive.id}/records`
+      ));
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const handleToggleExpand = (archive: ArchiveRecord) => {
+    if (expandedId === archive.id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(archive.id);
+    void loadRecords(archive);
+  };
 
   const handleDeleteArchive = async () => {
     if (!pendingDeleteId || !garageId) return;
@@ -27,7 +92,23 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
     setDeleteError(null);
     const archivePath = `garages/${garageId}/archives/${pendingDeleteId}`;
     try {
+      // Deleting a document does NOT delete its subcollections in Firestore.
+      // Without this the record chunks would linger forever, invisible and
+      // still billed for storage.
+      const recordsSnap = await getDocs(
+        collection(db, 'garages', garageId, 'archives', pendingDeleteId, 'records')
+      );
+      for (let i = 0; i < recordsSnap.docs.length; i += 450) {
+        const batch = writeBatch(db);
+        recordsSnap.docs.slice(i, i + 450).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
       await deleteDoc(doc(db, 'garages', garageId, 'archives', pendingDeleteId));
+      setRecords(prev => {
+        const next = { ...prev };
+        delete next[pendingDeleteId];
+        return next;
+      });
       setPendingDeleteId(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, archivePath);
@@ -57,6 +138,8 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
         <div className="space-y-4">
           {archives.map(archive => {
             const isExpanded = expandedId === archive.id;
+            const loaded = records[archive.id];
+            const isLoading = loadingId === archive.id;
             return (
               <div key={archive.id} className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
                 <div className="p-6 flex items-center justify-between gap-4 flex-wrap">
@@ -81,7 +164,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
 
                   <div className="flex items-center gap-2 ml-auto">
                     <button
-                      onClick={() => setExpandedId(isExpanded ? null : archive.id)}
+                      onClick={() => handleToggleExpand(archive)}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-gray-600 border border-gray-100 hover:bg-gray-50 transition cursor-pointer"
                     >
                       {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
@@ -97,8 +180,22 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                   </div>
                 </div>
 
-                {/* Expanded detail: jobs + invoices captured in this snapshot */}
-                {isExpanded && (
+                {/* Expanded detail: jobs + invoices captured in this snapshot,
+                    fetched on demand rather than carried in the list. */}
+                {isExpanded && isLoading && (
+                  <div className="border-t border-gray-100 px-6 py-8 flex items-center justify-center gap-3 text-xs text-gray-400">
+                    <span className="h-4 w-4 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin" />
+                    Loading archived records…
+                  </div>
+                )}
+
+                {isExpanded && !isLoading && loadError && (
+                  <div className="border-t border-gray-100 px-6 py-6 flex items-center gap-2 text-xs font-medium text-rose-600">
+                    <ShieldAlert className="w-4 h-4 shrink-0" /> {loadError}
+                  </div>
+                )}
+
+                {isExpanded && !isLoading && loaded && (
                   <div className="border-t border-gray-100 divide-y divide-gray-100">
                     <div className="overflow-x-auto">
                       <table className="w-full text-left border-collapse">
@@ -111,7 +208,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 text-xs">
-                          {archive.jobs.map(job => (
+                          {loaded.jobs.map(job => (
                             <tr key={job.id} className="hover:bg-gray-50/40">
                               <td className="px-6 py-3 text-gray-600 max-w-xs truncate">{job.description || '—'}</td>
                               <td className="px-6 py-3 text-gray-500">{job.technicianName || 'Unassigned'}</td>
@@ -119,7 +216,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                               <td className="px-6 py-3 text-right font-mono font-bold text-gray-800">{formatCurrency(job.laborCost, settings.currency)}</td>
                             </tr>
                           ))}
-                          {archive.jobs.length === 0 && (
+                          {loaded.jobs.length === 0 && (
                             <tr><td colSpan={4} className="px-6 py-4 text-center text-gray-400">No job cards in this snapshot</td></tr>
                           )}
                         </tbody>
@@ -137,7 +234,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 text-xs">
-                          {archive.invoices.map(inv => {
+                          {loaded.invoices.map(inv => {
                             const partsCost = (inv.lineItems || []).reduce((sum, item) => sum + (item.qty * item.unitCost), 0);
                             const total = partsCost + (inv.laborCost || 0);
                             return (
@@ -149,7 +246,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                               </tr>
                             );
                           })}
-                          {archive.invoices.length === 0 && (
+                          {loaded.invoices.length === 0 && (
                             <tr><td colSpan={4} className="px-6 py-4 text-center text-gray-400">No invoices in this snapshot</td></tr>
                           )}
                         </tbody>

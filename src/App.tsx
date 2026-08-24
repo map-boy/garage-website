@@ -11,6 +11,7 @@ import {
   collection, 
   query,
   orderBy,
+  limit,
   onSnapshot, 
   getDoc 
 } from 'firebase/firestore';
@@ -26,6 +27,19 @@ import ReportsPage from './components/ReportsPage';
 import EntitiesView from './components/EntitiesView';
 import LiveMonitoring from './components/LiveMonitoring';
 import ArchivesView from './components/ArchivesView';
+
+/**
+ * How many live records each unbounded collection holds.
+ *
+ * The dashboard subscribes to whole collections. Jobs and invoices grow for
+ * the life of the business, so an uncapped listener means every page load
+ * re-downloads (and is billed for) every record ever created — start-up time
+ * and cost both scale with the garage's age rather than its activity. The
+ * dashboard shows current operations and this month's figures, so a recent
+ * window is what it actually needs; older records live in Archives.
+ */
+const LIVE_WINDOW = 1000;
+const ARCHIVE_WINDOW = 60;
 
 export default function App() {
   // Authentication & Profile States
@@ -164,7 +178,12 @@ export default function App() {
     // Listener D: Job Cards subcollection
     const jobsPath = `garages/${garageId}/jobs`;
     try {
-      const unsubJobs = onSnapshot(collection(db, 'garages', garageId, 'jobs'), (snapshot) => {
+      const jobsQuery = query(
+        collection(db, 'garages', garageId, 'jobs'),
+        orderBy('startedAt', 'desc'),
+        limit(LIVE_WINDOW)
+      );
+      const unsubJobs = onSnapshot(jobsQuery, (snapshot) => {
         const list: JobCard[] = [];
         snapshot.forEach(docSnap => {
           list.push({ id: docSnap.id, ...docSnap.data() } as JobCard);
@@ -198,7 +217,12 @@ export default function App() {
     // Listener F: Invoices subcollection
     const invoicesPath = `garages/${garageId}/invoices`;
     try {
-      const unsubInvoices = onSnapshot(collection(db, 'garages', garageId, 'invoices'), (snapshot) => {
+      const invoicesQuery = query(
+        collection(db, 'garages', garageId, 'invoices'),
+        orderBy('issuedAt', 'desc'),
+        limit(LIVE_WINDOW)
+      );
+      const unsubInvoices = onSnapshot(invoicesQuery, (snapshot) => {
         const list: Invoice[] = [];
         snapshot.forEach(docSnap => {
           list.push({ id: docSnap.id, ...docSnap.data() } as Invoice);
@@ -233,7 +257,11 @@ export default function App() {
     // Listener H: Monthly Archives subcollection (newest first)
     const archivesPath = `garages/${garageId}/archives`;
     try {
-      const archivesQuery = query(collection(db, 'garages', garageId, 'archives'), orderBy('archivedAt', 'desc'));
+      const archivesQuery = query(
+        collection(db, 'garages', garageId, 'archives'),
+        orderBy('archivedAt', 'desc'),
+        limit(ARCHIVE_WINDOW)
+      );
       const unsubArchives = onSnapshot(archivesQuery, (snapshot) => {
         const list: ArchiveRecord[] = [];
         snapshot.forEach(docSnap => {
