@@ -2,18 +2,14 @@ rules_version = '2';
 
 // Security model
 // --------------
-// Firestore evaluates rules as a logical OR: if any match grants access, the
-// request succeeds. A blanket `match /{document=**} { allow read, write: if
-// false; }` therefore denies nothing — it only reads as if it does. Access is
-// denied by default when no rule matches, so the deny-all is deliberately
-// absent and every path below is opt-in.
+// Firestore ORs matching allow rules. A `match /{document=**} { allow …: if
+// false; }` therefore denies nothing — it only looks like a lock. Access is
+// denied by default when no rule grants, so there is no deny-all here.
 //
-// Server-owned fields (message quota, WhatsApp session, delivery state) are
-// written exclusively by Cloud Functions via the Admin SDK, which bypasses
-// these rules. Clients are blocked from writing them here, because a staff
-// user who could raise whatsappMessagesLimit could grant themselves unlimited
-// messaging, and one who could edit an invoice's delivery record could
-// replay a paid receipt at will.
+// Role BOSS (the web admin) is granted read+write on every path. Staff stay
+// confined to their garage. Server-owned fields (quota, WhatsApp session,
+// invoice delivery flags, the audit log) stay locked for staff; Cloud
+// Functions still bypass rules via the Admin SDK.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -35,7 +31,9 @@ service cloud.firestore {
     }
 
     function isSuper() {
-      return isSignedIn() && userRole() == 'BOSS';
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userRole() == 'BOSS';
     }
 
     // A BOSS oversees every garage; everyone else is confined to their own.
@@ -62,6 +60,11 @@ service cloud.firestore {
         .hasAny(fields.toSet());
     }
 
+    // Web admin: unrestricted. Must be a real users/{uid} with role BOSS.
+    match /{document=**} {
+      allow read, write: if isSuper();
+    }
+
     // ---- Users -------------------------------------------------------
     match /users/{userId} {
       allow get: if isSignedIn() && (request.auth.uid == userId || isSuper());
@@ -80,9 +83,6 @@ service cloud.firestore {
 
     // ---- Garages -----------------------------------------------------
     match /garages/{garageId} {
-      // Fields only the backend may set. Listed once and reused so a new
-      // server-owned field cannot be added to one rule and forgotten in
-      // another.
       function serverOwnedGarageFields() {
         return [
           'whatsappMessagesUsed',
@@ -101,7 +101,6 @@ service cloud.firestore {
       allow create: if isSignedIn()
                     && request.auth.uid == garageId
                     && request.resource.data.ownerId == request.auth.uid
-                    // A new garage cannot arrive pre-loaded with quota.
                     && !request.resource.data.keys().hasAny([
                       'whatsappMessagesUsed', 'whatsappMessagesLimit',
                       'whatsappSessionId'
@@ -111,52 +110,31 @@ service cloud.firestore {
                     && unchangedAll(serverOwnedGarageFields());
       allow delete: if false;
 
-      // ---- Invoices --------------------------------------------------
       match /invoices/{invoiceId} {
         allow read: if belongsToGarage(garageId);
         allow create: if belongsToGarage(garageId) && isStaffRole()
                       && !request.resource.data.keys()
                         .hasAny(['whatsappPaid', 'whatsappIssued']);
-        // Delivery records are written by the Admin SDK only. Letting a
-        // client clear one would allow unlimited re-sends of the same
-        // receipt, each billed against the garage's quota.
         allow update: if belongsToGarage(garageId) && isStaffRole()
                       && unchangedAll(['whatsappPaid', 'whatsappIssued']);
         allow delete: if belongsToGarage(garageId) && isManagerRole();
       }
 
-      // ---- WhatsApp audit log ----------------------------------------
-      // Readable for support and billing disputes; append-only from the
-      // server so the record cannot be edited after the fact.
       match /whatsappLogs/{logId} {
         allow read: if belongsToGarage(garageId) && isManagerRole();
         allow write: if false;
       }
 
-      // ---- Archived record chunks ------------------------------------
-      // A month-close snapshot stores its jobs and invoices as chunks one
-      // level deeper than the wildcard below reaches ({docId} matches a
-      // single path segment), so this path needs its own rule or the
-      // archive would be write-denied and unreadable.
       match /archives/{archiveId}/records/{chunkId} {
         allow read: if belongsToGarage(garageId);
         allow write: if belongsToGarage(garageId) && isManagerRole();
       }
 
-      // ---- Everything else under a garage ----------------------------
-      // clients, vehicles, jobs, stock, reminders, archives.
-      //
-      // This wildcard also matches the collections handled above, and rules
-      // combine with OR — so without the exclusion list a broad `allow write`
-      // here would silently re-grant everything the specific rules just
-      // withheld (delivery records, the audit log).
       match /{collectionName}/{docId} {
         function hasOwnWriteRule() {
           return collectionName in ['invoices', 'whatsappLogs'];
         }
 
-        // Only the audit log narrows *read* access beyond "any staff in this
-        // garage", so it is the one collection the wildcard read must skip.
         function hasOwnReadRule() {
           return collectionName == 'whatsappLogs';
         }
@@ -168,9 +146,6 @@ service cloud.firestore {
       }
     }
 
-    // ---- Shared infrastructure state ---------------------------------
-    // VM state is written by Cloud Functions; the dashboard reads it through
-    // the getVmStatus callable, so no client access is granted here.
     match /system/{docId} {
       allow read, write: if false;
     }
