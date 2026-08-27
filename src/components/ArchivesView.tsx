@@ -1,10 +1,11 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { doc, deleteDoc, collection, getDocs, writeBatch } from 'firebase/firestore';
 import {
   Archive, ChevronDown, ChevronUp, Trash2, AlertTriangle, ShieldAlert, Wrench, CreditCard, X
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { ArchiveRecord, ArchiveChunk, GarageSettings, JobCard, Invoice } from '../types';
+import { invoiceSpend } from '../utils/format';
 import { formatCurrency, formatDate } from '../utils/format';
 
 interface ArchivesViewProps {
@@ -185,7 +186,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                 {isExpanded && isLoading && (
                   <div className="border-t border-gray-100 px-6 py-8 flex items-center justify-center gap-3 text-xs text-gray-400">
                     <span className="h-4 w-4 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin" />
-                    Loading archived records…
+                    Loading archived recordsâ€¦
                   </div>
                 )}
 
@@ -210,7 +211,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                         <tbody className="divide-y divide-gray-100 text-xs">
                           {loaded.jobs.map(job => (
                             <tr key={job.id} className="hover:bg-gray-50/40">
-                              <td className="px-6 py-3 text-gray-600 max-w-xs truncate">{job.description || '—'}</td>
+                              <td className="px-6 py-3 text-gray-600 max-w-xs truncate">{job.description || 'â€”'}</td>
                               <td className="px-6 py-3 text-gray-500">{job.technicianName || 'Unassigned'}</td>
                               <td className="px-6 py-3 text-gray-500">{job.status}</td>
                               <td className="px-6 py-3 text-right font-mono font-bold text-gray-800">{formatCurrency(job.laborCost, settings.currency)}</td>
@@ -235,8 +236,7 @@ export default function ArchivesView({ garageId, archives, settings }: ArchivesV
                         </thead>
                         <tbody className="divide-y divide-gray-100 text-xs">
                           {loaded.invoices.map(inv => {
-                            const partsCost = (inv.lineItems || []).reduce((sum, item) => sum + (item.qty * item.unitCost), 0);
-                            const total = partsCost + (inv.laborCost || 0);
+                            const total = invoiceSpend(inv);
                             return (
                               <tr key={inv.id} className="hover:bg-gray-50/40">
                                 <td className="px-6 py-3 font-mono font-bold text-gray-800">#{inv.id?.slice(0, 8).toUpperCase() || 'BILL'}</td>

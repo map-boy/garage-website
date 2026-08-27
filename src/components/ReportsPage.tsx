@@ -1,10 +1,11 @@
-import { 
+﻿import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend 
 } from 'recharts';
 import { 
   TrendingUp, Activity, ShieldCheck, Printer, Users, CheckCircle2, RefreshCw 
 } from 'lucide-react';
 import { Client, Vehicle, JobCard, Part, Invoice, GarageSettings } from '../types';
+import { invoiceSpend } from '../utils/format';
 import { formatCurrency } from '../utils/format';
 
 interface ReportsPageProps {
@@ -37,8 +38,7 @@ export default function ReportsPage({
       const yearStr = d.getFullYear().toString().slice(-2);
       const key = `${month} '${yearStr}`;
 
-      const partsCost = (inv.lineItems || []).reduce((sum, item) => sum + (item.qty * item.unitCost), 0);
-      const invoiceTotal = partsCost + (inv.laborCost || 0);
+      const invoiceTotal = invoiceSpend(inv);
       groups[key] = (groups[key] || 0) + invoiceTotal;
     });
 
@@ -62,16 +62,15 @@ export default function ReportsPage({
   const monthlyRevenue = getMonthlyRevenue();
   
   // Total Paid Revenue
-  const totalPaidRevenue = invoices
+  const totalPaidSpend = invoices
     .filter(inv => inv.status === 'Paid')
     .reduce((sum, inv) => {
-      const partsCost = (inv.lineItems || []).reduce((s, item) => s + (item.qty * item.unitCost), 0);
-      return sum + partsCost + (inv.laborCost || 0);
+      return sum + invoiceSpend(inv);
     }, 0);
 
   // Avg Monthly Revenue
   const avgMonthlyRevenue = monthlyRevenue.length > 0 
-    ? totalPaidRevenue / monthlyRevenue.length 
+    ? totalPaidSpend / monthlyRevenue.length 
     : 0;
 
   // Inventory Health %
@@ -132,8 +131,8 @@ export default function ReportsPage({
         {/* Total revenue */}
         <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm print:shadow-none print:border-gray-300">
           <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400 block">Total Revenue</span>
-          <h3 className="text-2xl font-black text-gray-900 tracking-tight mt-2 print:text-xl font-mono">{formatCurrency(totalPaidRevenue, settings.currency)}</h3>
-          <p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold">Accumulated paid invoices</p>
+          <h3 className="text-2xl font-black text-gray-900 tracking-tight mt-2 print:text-xl font-mono">{formatCurrency(totalPaidSpend, settings.currency)}</h3>
+          <p className="text-[10px] text-gray-400 mt-1 uppercase font-semibold">Total spent on paid jobs (not income)</p>
         </div>
 
         {/* Avg Monthly Revenue */}

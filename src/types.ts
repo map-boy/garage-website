@@ -1,4 +1,4 @@
-export interface GarageSettings {
+﻿export interface GarageSettings {
   id: string;
   garageName: string;
   address: string;
@@ -41,6 +41,8 @@ export interface JobCard {
   status: JobStatus;
   partsUsed: { partId: string; quantity: number }[];
   laborCost: number;
+  technicianPaidMonthly?: boolean;
+  freeServices?: { description: string; cost: number }[];
   startedAt: string;
   completedAt?: string;
 }
@@ -61,9 +63,11 @@ export interface Invoice {
   id: string;
   jobId: string;
   clientId: string;
-  lineItems: { description: string; qty: number; unitCost: number }[];
+  lineItems: { description: string; qty: number; unitCost: number; isFree?: boolean }[];
   laborCost: number;
-  taxRate: number;
+  taxRate?: number;
+  /** What the client was billed on the EBM invoice. This is the revenue. */
+  amountCharged?: number;
   status: PaymentStatus;
   issuedAt: string;
 }
@@ -89,7 +93,7 @@ export interface UserProfile {
  * A month-close snapshot.
  *
  * The manifest carries only counts. The archived jobs and invoices live in
- * `archives/{id}/records/*` chunks and are fetched on demand — an archive
+ * `archives/{id}/records/*` chunks and are fetched on demand â€” an archive
  * used to embed every record inline, which both hit Firestore's 1 MiB
  * document cap and forced the dashboard to download years of history just to
  * render the list of month names.
