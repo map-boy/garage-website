@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
@@ -6,6 +6,7 @@ import {
   TrendingUp, Wrench, AlertTriangle, FileText, Clock, ChevronDown, ChevronUp, User, Car, Calendar, Phone, Info, Mail
 } from 'lucide-react';
 import { Client, Vehicle, JobCard, Part, Invoice, ServiceReminder, GarageSettings } from '../types';
+import { invoiceSpend } from '../utils/format';
 import { formatCurrency, formatDate } from '../utils/format';
 
 interface DashboardOverviewProps {
@@ -42,8 +43,7 @@ export default function DashboardOverview({
       const key = `${month} '${yearStr}`; // e.g. "Jul '26"
 
       // calculate cost: (qty * unitCost) + labor
-      const partsCost = (inv.lineItems || []).reduce((sum, item) => sum + (item.qty * item.unitCost), 0);
-      const invoiceTotal = partsCost + (inv.laborCost || 0);
+      const invoiceTotal = invoiceSpend(inv);
       groups[key] = (groups[key] || 0) + invoiceTotal;
     });
 
@@ -68,15 +68,15 @@ export default function DashboardOverview({
   const currentMonthRevenue = monthlyRevenue.length > 0 ? monthlyRevenue[monthlyRevenue.length - 1].value : 0;
 
   // Revenue change label calculations
-  let revenueChangeLabel = "—";
+  let revenueChangeLabel = "â€”";
   if (monthlyRevenue.length >= 2) {
     const prevVal = monthlyRevenue[monthlyRevenue.length - 2].value;
     const currentVal = monthlyRevenue[monthlyRevenue.length - 1].value;
     if (prevVal > 0) {
       const pct = ((currentVal - prevVal) / prevVal) * 100;
-      revenueChangeLabel = `${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}% vs last month`;
+      revenueChangeLabel = `${pct >= 0 ? 'â–²' : 'â–¼'} ${Math.abs(pct).toFixed(0)}% vs last month`;
     } else {
-      revenueChangeLabel = "▲ 100% vs last month";
+      revenueChangeLabel = "â–² 100% vs last month";
     }
   } else if (monthlyRevenue.length === 1) {
     revenueChangeLabel = "Initial baseline month";
@@ -204,8 +204,7 @@ export default function DashboardOverview({
             <p className="text-xs mt-1 text-gray-500 font-mono">
               {formatCurrency(
                 invoices.filter(inv => inv.status === 'Unpaid').reduce((acc, inv) => {
-                  const partsCost = (inv.lineItems || []).reduce((sum, item) => sum + (item.qty * item.unitCost), 0);
-                  return acc + partsCost + (inv.laborCost || 0);
+                  return acc + invoiceSpend(inv);
                 }, 0),
                 settings.currency
               )} total outstanding
@@ -297,7 +296,7 @@ export default function DashboardOverview({
               <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
                 <span className="text-[10px] font-bold text-gray-400 block uppercase tracking-wider">Turnaround</span>
                 <span className="text-lg font-black text-gray-800 font-mono mt-1 block">
-                  {avgTurnaroundHours > 0 ? `${avgTurnaroundHours.toFixed(1)} hrs` : '—'}
+                  {avgTurnaroundHours > 0 ? `${avgTurnaroundHours.toFixed(1)} hrs` : 'â€”'}
                 </span>
                 <span className="text-[9px] text-gray-400 block mt-0.5">Avg per job</span>
               </div>
